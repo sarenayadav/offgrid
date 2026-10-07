@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>off grid</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: #fff;
+    color: #111;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  header, footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 20px 24px;
+    letter-spacing: 0.02em;
+  }
+  header { top: 0; }
+  footer { bottom: 0; }
+
+  .muted { color: #9a9a9a; }
+
+  main {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 72px 24px;
+  }
+
+  figure {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    max-width: 100%;
+    opacity: 0;
+    transition: opacity 0.8s ease;
+  }
+  figure.visible { opacity: 1; }
+
+  img {
+    display: block;
+    max-width: min(100%, 880px);
+    max-height: calc(100vh - 220px);
+    width: auto;
+    height: auto;
+  }
+
+  figcaption {
+    margin-top: 18px;
+    max-width: 520px;
+    text-align: center;
+    color: #555;
+  }
+
+  button {
+    font: inherit;
+    letter-spacing: inherit;
+    color: #111;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid #111;
+    padding: 0 0 1px;
+    cursor: pointer;
+  }
+  button:disabled {
+    color: #9a9a9a;
+    border-bottom-color: transparent;
+    cursor: default;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #status {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span>off grid</span>
+  <span class="muted">one image, one minute</span>
+</header>
+
+<main>
+  <figure id="figure">
+    <img id="image" alt="">
+    <figcaption id="caption"></figcaption>
+  </figure>
+</main>
+
+<div id="status" class="muted"></div>
+
+<footer>
+  <span class="muted" id="credit"></span>
+  <button id="next" disabled>&nbsp;</button>
+</footer>
+
+<script>
+  const HOLD_MS = 60 * 1000;
+  const STORE_KEY = "offgrid.current";
+  const API =
+    "https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*" +
+    "&generator=random&grnnamespace=6&grnlimit=20" +
+    "&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth=1600" +
+    "&iiextmetadatafilter=ImageDescription|Artist";
+
+  const figure = document.getElementById("figure");
+  const image = document.getElementById("image");
+  const caption = document.getElementById("caption");
+  const credit = document.getElementById("credit");
+  const status = document.getElementById("status");
+  const next = document.getElementById("next");
+
+  let unlockAt = 0;
+  let ticker = null;
+
+  function plainText(html) {
+    const doc = new DOMParser().parseFromString(html || "", "text/html");
+    return doc.body.textContent.replace(/\s+/g, " ").trim();
+  }
+
+  function oneLine(text, max) {
+    if (text.length <= max) return text;
+    return text.slice(0, max).replace(/\s+\S*$/, "") + "…";
+  }
+
+  function titleFromFile(title) {
+    return title
+      .replace(/^File:/, "")
+      .replace(/\.[a-z0-9]+$/i, "")
+      .replace(/_/g, " ")
+      .trim();
+  }
+
+  // Pure chance: ask Wikimedia Commons for random files and take the first usable photo.
+  async function fetchRandom() {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await fetch(API, { cache: "no-store" });
+      const data = await res.json();
+      const pages = Object.values((data.query && data.query.pages) || {});
+      for (const page of pages) {
+        const info = page.imageinfo && page.imageinfo[0];
+        if (!info) continue;
+        if (info.mime !== "image/jpeg" && info.mime !== "image/png") continue;
+        if (info.width < 600 || info.height < 400) continue;
+        const meta = info.extmetadata || {};
+        const described = plainText(meta.ImageDescription && meta.ImageDescription.value);
+        return {
+          src: info.thumburl || info.url,
+          text: oneLine(described.length > 3 ? described : titleFromFile(page.title), 160),
+          by: oneLine(plainText(meta.Artist && meta.Artist.value), 60),
+          link: info.descriptionurl
+        };
+      }
+    }
+    throw new Error("nothing found");
+  }
+
+  function load(src) {
+    return new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = reject;
+      image.src = src;
+    });
+  }
+
+  function tick() {
+    const left = unlockAt - Date.now();
+    if (left <= 0) {
+      clearInterval(ticker);
+      next.disabled = false;
+      next.textContent = "next";
+      return;
+    }
+    const s = Math.ceil(left / 1000);
+    next.disabled = true;
+    next.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+
+  function startHold(until) {
+    unlockAt = until;
+    clearInterval(ticker);
+    tick();
+    ticker = setInterval(tick, 250);
+  }
+
+  async function show(item, until) {
+    await load(item.src);
+    image.alt = item.text;
+    caption.textContent = item.text;
+    credit.textContent = item.by;
+    status.textContent = "";
+    figure.classList.add("visible");
+    const holdUntil = until || Date.now() + HOLD_MS;
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ item: item, until: holdUntil }));
+    } catch (e) {}
+    startHold(holdUntil);
+  }
+
+  async function fresh() {
+    next.disabled = true;
+    next.innerHTML = "&nbsp;";
+    figure.classList.remove("visible");
+    status.textContent = "";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await show(await fetchRandom());
+        return;
+      } catch (e) {}
+    }
+    status.textContent = "no connection";
+    next.disabled = false;
+    next.textContent = "try again";
+  }
+
+  next.addEventListener("click", () => {
+    if (!next.disabled) fresh();
+  });
+
+  // Reloading the page does not skip the minute: the same image comes back with its time left.
+  (async function start() {
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(STORE_KEY));
+    } catch (e) {}
+    if (saved && saved.item && saved.until > Date.now()) {
+      try {
+        await show(saved.item, saved.until);
+        return;
+      } catch (e) {}
+    }
+    fresh();
+  })();
+</script>
+</body>
+</html>
